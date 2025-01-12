@@ -139,6 +139,142 @@ func uploadToCloud(ctx context.Context, filePath, fileName string, metadata map[
 }
 ```
 
+## Cloud Storage Integration
+
+### Custom Cloud Provider Implementation
+```go
+// Implement your cloud storage provider
+type MyCloudStorage struct {
+    // Add your cloud configuration here
+    BucketName string
+    Region     string
+}
+
+func (m *MyCloudStorage) UploadFile(ctx context.Context, localPath, fileName string, metadata map[string]interface{}) error {
+    // Implement your cloud upload logic
+    // Example with AWS S3:
+    /*
+    uploader := s3manager.NewUploader(session.New())
+    file, err := os.Open(localPath)
+    if err != nil {
+        return fmt.Errorf("failed to open file %q, %v", localPath, err)
+    }
+    defer file.Close()
+
+    result, err := uploader.Upload(&s3manager.UploadInput{
+        Bucket:   aws.String(m.BucketName),
+        Key:      aws.String(fileName),
+        Body:     file,
+        Metadata: aws.StringMap(metadata),
+    })
+    */
+    return nil
+}
+```
+
+### Complete Upload Flow Example
+```go
+func main() {
+    ctx := context.Background()
+    
+    // Initialize storage and processor
+    baseDir := "./uploads"
+    storage, _ := chunkprocessor.NewDiskStorage(baseDir)
+    processor := chunkprocessor.NewChunkProcessor(storage, 5)
+
+    // Initialize upload with metadata
+    metadata := map[string]interface{}{
+        "user_id":      "user123",
+        "category":     "photos",
+        "content_type": "image/jpeg",
+        "tags":         []string{"vacation", "summer"},
+    }
+
+    // Start upload process
+    upload, err := processor.InitializeUpload(ctx, "vacation.jpg", 1024*1024*10, 256000, metadata)
+    if err != nil {
+        log.Fatalf("Failed to initialize upload: %v", err)
+    }
+
+    // ... Upload chunks ...
+
+    // Get assembled file path
+    filePath, err := processor.GetFileContent(ctx, upload.ID, upload.Hash)
+    if err != nil {
+        log.Fatalf("Failed to assemble file: %v", err)
+    }
+
+    // Upload to cloud storage
+    cloud := &MyCloudStorage{
+        BucketName: "my-bucket",
+        Region:     "us-west-2",
+    }
+
+    if err := cloud.UploadFile(ctx, filePath, upload.Filename, upload.Metadata); err != nil {
+        log.Printf("Failed to upload to cloud: %v", err)
+        return
+    }
+
+    // Clean up after successful cloud transfer
+    if err := storage.CleanupSuccessfulUpload(ctx, upload.ID); err != nil {
+        log.Printf("Failed to cleanup: %v", err)
+    }
+}
+```
+
+### Automatic Cleanup Process
+```go
+func startCleanupRoutine(ctx context.Context, processor *chunkprocessor.ChunkProcessor) {
+    ticker := time.NewTicker(24 * time.Hour)
+    defer ticker.Stop()
+
+    for {
+        select {
+        case <-ticker.C:
+            // Cleanup incomplete uploads older than retention period
+            if err := processor.CleanupUploads(ctx); err != nil {
+                log.Printf("Failed to cleanup uploads: %v", err)
+            }
+        case <-ctx.Done():
+            return
+        }
+    }
+}
+
+func main() {
+    ctx := context.Background()
+    processor := initializeProcessor()
+
+    // Start cleanup routine
+    go startCleanupRoutine(ctx, processor)
+
+    // ... Rest of your application ...
+}
+```
+
+### File Lifecycle
+1. **Temporary Storage**: Files are initially stored in chunks in the temporary directory
+2. **Assembly**: Chunks are assembled into the complete file
+3. **Cloud Upload**: File is uploaded to cloud storage
+4. **Cleanup**: Local files are cleaned up after successful cloud upload
+5. **Automatic Cleanup**: Incomplete uploads are automatically cleaned up after retention period
+
+### Cleanup Policies
+- Successful uploads: Cleaned up immediately after cloud storage confirmation
+- Failed uploads: Retained for troubleshooting
+- Incomplete uploads: Cleaned up after `DefaultIncompleteRetention` (14 days)
+- Temporary chunks: Removed after successful file assembly
+
+### Example Cleanup Configuration
+```go
+const (
+    DefaultRetentionPeriod     = 48 * time.Hour    // Retention for completed uploads
+    DefaultIncompleteRetention = 336 * time.Hour   // 14 days for incomplete uploads
+    MaxConcurrentUploads      = 100               // Maximum concurrent uploads
+    MaxAssemblyWorkers        = 4                 // Workers for file assembly
+)
+```
+
 ## Models
 
 ### FileUpload
@@ -670,9 +806,9 @@ func main() {
     // Initialize upload
     h.POST("/upload/init", func(ctx context.Context, c *app.RequestContext) {
         var req struct {
-            Filename  string                 `json:"filename"`
-            TotalSize int64                 `json:"totalSize"`
-            ChunkSize int64                 `json:"chunkSize"`
+            Filename string                 `json:"filename"`
+            TotalSize int64                `json:"totalSize"`
+            ChunkSize int64                `json:"chunkSize"`
             Metadata  map[string]interface{} `json:"metadata"`
         }
         if err := c.BindJSON(&req); err != nil {
