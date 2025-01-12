@@ -1,0 +1,28 @@
+# Binary files
+main
+bin/
+
+# Test data
+testdata/
+
+# Upload directory
+uploads/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Go specific
+*.exe
+*.test
+*.prof
+*.out
+
+# Test code
+main.go
